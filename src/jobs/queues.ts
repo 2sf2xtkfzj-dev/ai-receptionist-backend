@@ -1,0 +1,241 @@
+// ============================================
+// BullMQ Queue Definitions
+// ============================================
+
+import { Queue, Job } from 'bullmq';
+import { redisConnection, QueueNames } from '@config/redis';
+import { config } from '@config/index';
+import { logger } from '@utils/logger';
+import { 
+  WebhookDeliveryJob, 
+  CallProcessingJob, 
+  MetricsAggregationJob 
+} from '@types/index';
+
+// ============================================
+// Queue Instances
+// ============================================
+
+export const webhookDeliveryQueue = new Queue<WebhookDeliveryJob>(
+  QueueNames.WEBHOOK_DELIVERY,
+  {
+    connection: redisConnection,
+    defaultJobOptions: {
+      attempts: config.queues.webhookDelivery.attempts,
+      backoff: config.queues.webhookDelivery.backoff,
+      removeOnComplete: {
+        count: 1000,
+        age: 24 * 60 * 60, // 24 hours
+      },
+      removeOnFail: {
+        count: 500,
+        age: 7 * 24 * 60 * 60, // 7 days
+      },
+    },
+  }
+);
+
+export const callProcessingQueue = new Queue<CallProcessingJob>(
+  QueueNames.CALL_PROCESSING,
+  {
+    connection: redisConnection,
+    defaultJobOptions: {
+      attempts: config.queues.callProcessing.attempts,
+      backoff: config.queues.callProcessing.backoff,
+      removeOnComplete: {
+        count: 500,
+        age: 24 * 60 * 60,
+      },
+      removeOnFail: {
+        count: 250,
+        age: 7 * 24 * 60 * 60,
+      },
+    },
+  }
+);
+
+export const metricsAggregationQueue = new Queue<MetricsAggregationJob>(
+  QueueNames.METRICS_AGGREGATION,
+  {
+    connection: redisConnection,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 5000,
+      },
+      removeOnComplete: {
+        count: 100,
+      },
+      removeOnFail: {
+        count: 50,
+      },
+    },
+  }
+);
+
+export const deadLetterQueue = new Queue(
+  QueueNames.DEAD_LETTER,
+  {
+    connection: redisConnection,
+    defaultJobOptions: {
+      removeOnComplete: false, // Keep dead letter records
+      removeOnFail: false,
+    },
+  }
+);
+
+// ============================================
+// Queue Event Handlers
+// ============================================
+
+webhookDeliveryQueue.on('completed', (job: Job) => {
+  logger.debug('Webhook delivery completed', {
+    jobId: job.id,
+    eventId: job.data.eventId,
+    tenantId: job.data.tenantId,
+  });
+});
+
+webhookDeliveryQueue.on('failed', (job: Job | undefined, error: Error) => {
+  logger.error('Webhook delivery failed', {
+    jobId: job?.id,
+    eventId: job?.data?.eventId,
+    tenantId: job?.data?.tenantId,
+    error: error.message,
+    attempts: job?.attemptsMade,
+  });
+});
+
+callProcessingQueue.on('completed', (job: Job) => {
+  logger.debug('Call processing completed', {
+    jobId: job.id,
+    eventId: job.data.eventId,
+    tenantId: job.data.tenantId,
+  });
+});
+
+callProcessingQueue.on('failed', (job: Job | undefined, error: Error) => {
+  logger.error('Call processing failed', {
+    jobId: job?.id,
+    eventId: job?.data?.eventId,
+    tenantId: job?.data?.tenantId,
+    error: error.message,
+  });
+});
+
+// ============================================
+// Job Addition Helpers
+// ============================================
+
+export async function addWebhookDeliveryJob(
+  data: WebhookDeliveryJob,
+  delay?: number
+): Promise<Job> {
+  return webhookDeliveryQueue.add(
+    `webhook-delivery-${data.eventId}`,
+    data,
+    {
+      delay,
+      jobId: `${data.eventId}-${data.attemptNumber}`,
+    }
+  );
+}
+
+export async function addCallProcessingJob(
+  data: CallProcessingJob
+): Promise<Job> {
+  return callProcessingQueue.add(
+    `call-processing-${data.eventId}`,
+    data,
+    {
+      jobId: `call-${data.eventId}`,
+    }
+  );
+}
+
+export async function addMetricsAggregationJob(
+  data: MetricsAggregationJob,
+  delay?: number
+): Promise<Job> {
+  return metricsAggregationQueue.add(
+    `metrics-${data.tenantId}-${data.date}`,
+    data,
+    {
+      delay,
+      jobId: `metrics-${data.tenantId}-${data.date}`,
+    }
+  );
+}
+
+export async function addToDeadLetter(
+  originalQueue: string,
+  originalJob: Job,
+  error: Error
+): Promise<Job> {
+  return deadLetterQueue.add(
+    `dead-letter-${originalJob.id}`,
+    {
+      originalQueue,
+      originalJobId: originalJob.id,
+      data: originalJob.data,
+      error: {
+        message: error.message,
+        stack: error.stack,
+      },
+      failedAt: new Date().toISOString(),
+    },
+    {
+      jobId: `dlq-${originalQueue}-${originalJob.id}-${Date.now()}`,
+    }
+  );
+}
+
+// ============================================
+// Queue Health Check
+// ============================================
+
+export async function checkQueueHealth(): Promise<{
+  healthy: boolean;
+  queues: Record<string, { waiting: number; active: number; completed: number; failed: number }>;
+}> {
+  const queues = {
+    [QueueNames.WEBHOOK_DELIVERY]: webhookDeliveryQueue,
+    [QueueNames.CALL_PROCESSING]: callProcessingQueue,
+    [QueueNames.METRICS_AGGREGATION]: metricsAggregationQueue,
+    [QueueNames.DEAD_LETTER]: deadLetterQueue,
+  };
+  
+  const health: Record<string, { waiting: number; active: number; completed: number; failed: number }> = {};
+  
+  for (const [name, queue] of Object.entries(queues)) {
+    const [waiting, active, completed, failed] = await Promise.all([
+      queue.getWaitingCount(),
+      queue.getActiveCount(),
+      queue.getCompletedCount(),
+      queue.getFailedCount(),
+    ]);
+    
+    health[name] = { waiting, active, completed, failed };
+  }
+  
+  return {
+    healthy: true,
+    queues: health,
+  };
+}
+
+// ============================================
+// Graceful Shutdown
+// ============================================
+
+export async function closeQueues(): Promise<void> {
+  await Promise.all([
+    webhookDeliveryQueue.close(),
+    callProcessingQueue.close(),
+    metricsAggregationQueue.close(),
+    deadLetterQueue.close(),
+  ]);
+  
+  logger.info('All queues closed');
+}

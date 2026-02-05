@@ -1,0 +1,72 @@
+# ============================================
+# AI Receptionist Backend - Docker Compose
+# For local development only
+# ============================================
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai-receptionist-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_receptionist
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache/Queue
+  redis:
+    image: redis:7-alpine
+    container_name: ai-receptionist-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: ai-receptionist-api
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ai_receptionist?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: dev-jwt-secret-change-in-production-min-32-chars
+      WEBHOOK_SECRET: dev-webhook-secret-change-in-production-min-32
+      LOG_LEVEL: debug
+      LOG_FORMAT: pretty
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src:ro
+      - ./prisma:/app/prisma:ro
+    command: ["npx", "tsx", "watch", "src/index.ts"]
+    # For production, use: ["node", "dist/index.js"]
+
+volumes:
+  postgres_data:
+  redis_data:
