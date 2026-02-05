@@ -4,19 +4,20 @@
   "description": "AI Receptionist SaaS Backend - Multi-tenant webhook-based call handling",
   "main": "dist/index.js",
   "scripts": {
-    "postinstall": "prisma generate",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
+
     "test": "vitest run",
-    "test:watch": "vitest",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": ["ai", "receptionist", "saas", "twilio", "vapi", "webhooks"],
-  "author": "",
   "license": "MIT",
   "dependencies": {
     "@prisma/client": "^5.7.0",
@@ -51,3 +52,4 @@
     "node": ">=20.0.0"
   }
 }
+
