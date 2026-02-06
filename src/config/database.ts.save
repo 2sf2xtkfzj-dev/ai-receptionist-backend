@@ -1,0 +1,44 @@
+import { PrismaClient } from '@prisma/client';
+
+declare global {
+  var prisma: PrismaClient | undefined;
+}
+
+export const prisma =
+  global.prisma ||
+  new PrismaClient({
+    log: ['error'],
+  });
+
+if (process.env.NODE_ENV !== 'production') {
+  global.prisma = prisma;
+}
+
+/**
+ * Compatibility helpers (used in src/index.ts)
+ * Kept intentionally simple
+ */
+export async function connectDatabase() {
+  // Prisma connects lazily – nothing needed here
+  return;
+}
+
+export async function disconnectDatabase() {
+  await prisma.$disconnect();
+}
+
+npm import { PrismaClient } from '@prisma/client';
+
+declare global {
+  var prisma: PrismaClient | undefined;
+}
+
+export const prisma =
+  global.prisma ||
+  new PrismaClient({
+    log: ['error'],
+  });
+
+if (process.env.NODE_ENV !== 'production') {
+  global.prisma = prisma;
+}
